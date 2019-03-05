@@ -23,8 +23,16 @@ setup_drupal() {
 }
 
 # Wait for MySQL connection.
-TIMEOUT=300
-if ! nc -w $TIMEOUT -z "$DB_HOST" 3306; then
+connected=false
+for _ in $(seq 1 10); do
+	if nc -z "$DB_HOST" 3306; then
+		connected=true
+		break
+	fi
+	sleep 6
+done
+
+if [ "$connected" = false ]; then
     echo "Unable to connect to $DB_HOST, quit"
     exit 1
 fi
