@@ -37,20 +37,6 @@ spec:
               value: yuankun
             - name: ACCOUNT_PASS
               value: changeme
-          livenessProbe:
-            httpGet:
-              port: 80
-            initialDelaySeconds: 10
-            timeoutSeconds: 30
-            failureThreshold: 10
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              port: 80
-            initialDelaySeconds: 300
-            timeoutSeconds: 30
-            failureThreshold: 10
-            periodSeconds: 10
           resources:
               limits:
                 cpu: 200m
