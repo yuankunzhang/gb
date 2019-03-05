@@ -12,7 +12,7 @@ volumes:
 
 services:
   drupal:
-    build: .
+    image: quay.io/yuankunzhang/gb:latest
     networks:
       - drupal
     volumes:
