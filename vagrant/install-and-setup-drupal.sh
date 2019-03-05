@@ -91,6 +91,18 @@ install_php() {
 	# Install php and necessary extensions.
 	apt-get install -y php php-mysql php-curl php-zip php-cli php-gd \
 		php-xml php-mbstring php-simplexml libapache2-mod-php
+
+	# Configure opcache.
+	# See:
+	#   - https://secure.php.net/manual/en/opcache.installation.php
+	cat <<OPCACHE >> /etc/php/7.0/cli/conf.d/10-opcache.ini
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=4000
+opcache.revalidate_freq=60
+opcache.fast_shutdown=1
+opcache.enable_cli=1
+OPCACHE
 }
 
 install_drupal() {
@@ -175,7 +187,7 @@ setup_drupal() {
 	chown -R www-data:www-data $DRUPAL_DIR
 
 	# Add Apache site config.
-	cat << EOF > /etc/apache2/sites-available/localhost.conf
+	cat << EOF > /etc/apache2/sites-available/site.conf
 ServerName localhost
 
 <VirtualHost *:80>
@@ -192,12 +204,12 @@ ServerName localhost
     </Directory>
 </VirtualHost>
 EOF
-	ln -s /etc/apache2/sites-available/localhost.conf /etc/apache2/sites-enabled/localhost.conf
 
 	# Disable the default site.
 	# WARNING: Don't do this in production.
 	a2dissite 000-default.conf
 
+    a2ensite site.conf
 	apache2ctl restart
 }
 
