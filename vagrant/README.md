@@ -1,4 +1,4 @@
-# Setup Drupal in a Vagrant Environment
+# Running Drupal Vagrant
 
 ## Usage
 
