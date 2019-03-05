@@ -8,49 +8,70 @@
 #
 
 set -e
+# Uncomment this line for debugging.
 #set -x
 
+# Database variables.
 DB_ROOT_PASS=changeme
 DB_NAME=drupal
 DB_USER=drupal
 DB_PASS=changeme
 
+# Drupal variables.
 DRUPAL_VERSION=8.6.10
 DRUPAL_MD5=5aee2dacfb525f146fc28b4535066d1c
 DRUPAL_DIR=/var/www/html/drupal
 
+# Site variables.
 SITE_NAME="My Site"
-SITE_MAIL="site@yuankun.me"
-SITE_ADMIN_NAME="Yuankun"
-SITE_ADMIN_MAIL="admin@yuankun.me"
-SITE_ADMIN_PASS="changeme"
+ACCOUNT_NAME="Yuankun"
+ACCOUNT_PASS="changeme"
 
 prepare_env() {
-	echo "Preparing the environment..."
+	echo "Preparing the running environment..."
+
+	export DEBIAN_FRONTEND=noninteractive
+
 	apt-get update
-	# Enable Dynamic Swap Space to prevent OOM crashes
+	# Enable Dynamic Swap Space to prevent OOM crashes.
 	apt-get install -y swapspace
+	# Required by Drupal.
 	apt-get install -y zip unzip
 }
 
 install_apache() {
 	echo "Installing Apache..."
+
+	if type "apache2" > /dev/null 2>&1; then
+		echo "Apache2 exists. Environment already provisioned?"
+		exit 1
+	fi
+
+	# Install the apache2 package, should automatically run after the install.
 	apt-get install -y apache2
 
-	# required by drupal clean urls
-	ln -s /etc/apache2/mods-available/rewrite.load /etc/apache2/mods-enabled/rewrite.load
+	# The "rewrite module" is required by Drupal clean URLs.
+	# See:
+	#   - https://www.drupal.org/docs/8/clean-urls-in-drupal-8/fix-drupal-8-clean-urls-problems
+	a2enmod rewrite
 }
 
 install_mysql() {
 	echo "Installing MySQL..."
 
-	# disable prompt
+	if type "mysql" > /dev/null 2>&1; then
+		echo "MySQL exists. Environment already provisioned?"
+		exit 1
+	fi
+
+	# Disable prompt.
 	echo mysql-server mysql-server/root_password password $DB_ROOT_PASS | debconf-set-selections
 	echo mysql-server mysql-server/root_password_again password $DB_ROOT_PASS | debconf-set-selections
 
+	# Install the mysql-server package, should automatically run after the install.
 	apt-get install -y mysql-server
 
-	# setup database and user
+	# Create database and user, and grant necessary privileges.
 	mysql -u root -p$DB_ROOT_PASS <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;
 CREATE USER '$DB_USER'@'%' IDENTIFIED BY '$DB_PASS';
@@ -61,33 +82,100 @@ SQL
 
 install_php() {
 	echo "Installing PHP..."
-	apt-get install -y php php-mysql php-curl php-zip libapache2-mod-php php-cli php-xml php-mbstring php-gd php-simplexml
+
+	if type "php" > /dev/null 2>&1; then
+		echo "PHP exists. Environment already provisioned?"
+		exit 1
+	fi
+
+	# Install php and necessary extensions.
+	apt-get install -y php php-mysql php-curl php-zip php-cli php-gd \
+		php-xml php-mbstring php-simplexml libapache2-mod-php
 }
 
 install_drupal() {
 	echo "Installing Drupal..."
 
+	# Sanity check begin.
+	if ! type "apache2" > /dev/null 2>&1; then
+		echo "Apache not exists. Install Apache first."
+		exit 1
+	fi
+
+	if ! type "php" > /dev/null 2>&1; then
+		echo "PHP not exists. Install PHP first."
+		exit 1
+	fi
+
+	if ! type "mysql" > /dev/null 2>&1; then
+		echo "MySQL not exists. Install MySQL first."
+		exit 1
+	fi
+
 	if [ ! -d "/var/www/html" ]; then
 		echo "Directory /var/www/html not exists, make sure Apache is installed"
-		exit
+		exit 1
 	fi
 
-	if [ ! -d "$DRUPAL_DIR" ]; then
-		mkdir $DRUPAL_DIR
+	if [ -d "$DRUPAL_DIR" ]; then
+		echo "Drupal directory exists. Environment already provisioned?"
 	fi
+	# Sanity check end.
+
+	mkdir $DRUPAL_DIR
 	cd $DRUPAL_DIR
 
-	# install drupal
+	# Install Drupal. Also do MD5 sum check.
+	# See:
+	#   - https://www.drupal.org/project/drupal/releases/
 	curl -sSL "https://ftp.drupal.org/files/projects/drupal-${DRUPAL_VERSION}.tar.gz" -o drupal.tar.gz
-	echo "${DRUPAL_MD5}  drupal.tar.gz" | md5sum -c - >/dev/null
+	echo "${DRUPAL_MD5}  drupal.tar.gz" | md5sum -c - > /dev/null
 	tar -xz --strip-components=1 -f drupal.tar.gz
 	rm drupal.tar.gz
+}
 
-	# change owner
-	chown -R www-data:www-data sites modules themes
+setup_drupal() {
+	echo "Setting up Drupal..."
 
-	# config apache
-	cat << EOF > /etc/apache2/sites-available/site.conf
+	# Sanity check begin.
+	if [ ! -d "$DRUPAL_DIR" ]; then
+		echo "Directory $DRUPAL_DIR not exists, check previous steps"
+		exit
+	fi
+	# Sanity check end.
+
+	cd $DRUPAL_DIR
+
+	# Install composer.
+	curl -sSL https://getcomposer.org/installer | php
+
+	# Install drush.
+	# TODO: maybe consider not to run composer as root.
+	# See:
+	#   - http://docs.drush.org/en/master/install/
+	php composer.phar require drush/drush
+
+	# Install new site.
+	# See:
+	#   - https://drushcommands.com/drush-8x/core/site-install/
+	./vendor/bin/drush site-install standard -y \
+		--db-url="mysql://$DB_USER:$DB_PASS@localhost:3306/$DB_NAME" \
+		--site-name="$SITE_NAME" \
+		--account-name="$ACCOUNT_NAME" \
+		--account-pass="$ACCOUNT_PASS"
+
+	# Disable CSS & JS aggregation.
+	# See:
+	#   - https://www.drupal.org/forum/support/installing-drupal/2015-11-24/no-css-loading-on-fresh-install-of-drupal-800
+	#   - https://drupal.stackexchange.com/questions/221268/how-to-disable-aggregation-from-either-drush-or-phpmyadmin
+	./vendor/bin/drush -y config-set system.performance css.preprocess 0
+	./vendor/bin/drush -y config-set system.performance js.preprocess 0
+
+	# Change site owner.
+	chown -R www-data:www-data $DRUPAL_DIR
+
+	# Add Apache site config.
+	cat << EOF > /etc/apache2/sites-available/localhost.conf
 ServerName localhost
 
 <VirtualHost *:80>
@@ -104,48 +192,26 @@ ServerName localhost
     </Directory>
 </VirtualHost>
 EOF
-	ln -s /etc/apache2/sites-available/site.conf /etc/apache2/sites-enabled/site.conf
-	rm /etc/apache2/sites-enabled/000-default.conf
+	ln -s /etc/apache2/sites-available/localhost.conf /etc/apache2/sites-enabled/localhost.conf
+
+	# Disable the default site.
+	# WARNING: Don't do this in production.
+	a2dissite 000-default.conf
+
 	apache2ctl restart
 }
 
-setup_drupal() {
-	echo "Setting up Drupal..."
-
-	if [ ! -d "$DRUPAL_DIR" ]; then
-		echo "Directory $DRUPAL_DIR not exists, check previous steps"
-		exit
-	fi
-	cd $DRUPAL_DIR
-
-	# install composer
-	curl -sSL https://getcomposer.org/installer | php
-
-	# install drupal-console
-	php composer.phar require drupal/console:~1.0 \
-		--prefer-dist \
-		--optimize-autoloader
-
-	# setup site
-	./vendor/bin/drupal site:install standard \
-		--langcode="en" \
-		--db-type="mysql" \
-		--db-host="127.0.0.1" \
-		--db-name="$DB_NAME" \
-		--db-user="${DB_USER}" \
-		--db-pass="${DB_PASS}" \
-		--db-port="3306" \
-		--db-prefix="dp_" \
-		--site-name="$SITE_NAME" \
-		--site-mail="$SITE_MAIL" \
-		--account-name="$SITE_ADMIN_NAME" \
-		--account-mail="$SITE_ADMIN_MAIL" \
-		--account-pass="$SITE_ADMIN_PASS"
-}
+echo "######################################################"
+echo "Installation will start now, please be patient      :)"
+echo "######################################################"
 
 prepare_env
 install_apache
 install_mysql
 install_php
 install_drupal
-#setup_drupal
+setup_drupal
+
+echo "######################################################"
+echo "Installation completed, visit http://localhost:8080 :)"
+echo "######################################################"
